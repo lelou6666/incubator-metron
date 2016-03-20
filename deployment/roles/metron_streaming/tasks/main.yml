@@ -1,0 +1,90 @@
+#
+#  Licensed to the Apache Software Foundation (ASF) under one or more
+#  contributor license agreements.  See the NOTICE file distributed with
+#  this work for additional information regarding copyright ownership.
+#  The ASF licenses this file to You under the Apache License, Version 2.0
+#  (the "License"); you may not use this file except in compliance with
+#  the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+#
+---
+- name: Create Metron streaming directories
+  file: path="{{ metron_directory }}/{{ item.name }}"  state=directory mode=0755
+  with_items:
+      - { name: 'lib'}
+      - { name: 'bin'}
+      - { name: 'config'}
+
+
+- name: Copy Metron Topologies bundle
+  copy:
+    src: "{{ metron_topologies_bundle_path }}"
+    dest: "{{ metron_directory }}"
+
+- name: Copy Metron DataLoads bundle
+  copy:
+    src: "{{ metron_dataloads_path }}"
+    dest: "{{ metron_directory }}"
+
+- name: Unbundle Metron bundles
+  shell: cd {{ metron_directory }} && tar xzvf Metron-Topologies*.tar.gz && tar xzvf Metron-DataLoads*.tar.gz && rm *.tar.gz
+
+- name: Add hbase-site.xml to topology jar
+  shell: cd {{ hbase_config_path }} && jar -uf {{ metron_directory }}/lib/{{ metron_jar_name }} hbase-site.xml
+
+- name: Add core-site.xml to topology jar
+  shell: cd {{ hdfs_config_path }} && jar -uf {{ metron_directory }}/lib/{{ metron_jar_name }} core-site.xml
+
+- name: Add hdfs-site.xml to topology jar
+  shell: cd {{ hdfs_config_path }} && jar -uf {{ metron_directory }}/lib/{{ metron_jar_name }} hdfs-site.xml
+
+- name: Get Default mysql passowrd
+  include_vars: "../roles/mysql_server/defaults/main.yml"
+  when: mysql_root_password is undefined
+
+- include: hdfs_filesystem.yml
+  run_once: true
+
+- include: grok_upload.yml
+  run_once: true
+
+- name: Configure Metron topologies
+  lineinfile: >
+    dest={{ metron_properties_config_path }}
+    regexp="{{ item.regexp }}"
+    line="{{ item.line }}"
+  with_items:
+    - { regexp: "kafka.zk=", line: "kafka.zk={{ zookeeper_url }}" }
+    - { regexp: "kafka.broker=", line: "kafka.broker={{ kafka_broker_url }}" }
+    - { regexp: "es.ip=", line: "es.ip={{ groups.search[0] }}" }
+    - { regexp: "es.port=", line: "es.port={{ elasticsearch_transport_port }}" }
+    - { regexp: "es.clustername=", line: "es.clustername={{ elasticsearch_cluster_name }}" }
+    - { regexp: "bolt.hdfs.file.system.url=", line: "bolt.hdfs.file.system.url={{ hdfs_url }}" }
+    - { regexp: "spout.kafka.topic.pcap=", line: "spout.kafka.topic.pcap={{ pycapa_topic }}" }
+    - { regexp: "spout.kafka.topic.bro=", line: "spout.kafka.topic.bro={{ bro_topic }}" }
+    - { regexp: "bolt.hbase.table.name=", line: "bolt.hbase.table.name={{ pcap_hbase_table }}" }
+    - { regexp: "threat.intel.tracker.table=", line: "threat.intel.tracker.table={{ tracker_hbase_table }}" }
+    - { regexp: "threat.intel.tracker.cf=", line: "threat.intel.tracker.cf=t" }
+    - { regexp: "threat.intel.ip.table=", line: "threat.intel.ip.table={{ threatintel_ip_hbase_table }}" }
+    - { regexp: "threat.intel.ip.cf=", line: "threat.intel.ip.cf=t" }
+    - { regexp: "mysql.ip=", line: "mysql.ip={{ groups.mysql[0] }}" }
+    - { regexp: "mysql.password=", line: "mysql.password={{ mysql_root_password }}" }
+    - { regexp: "index.hdfs.output=", line: "index.hdfs.output={{ metron_hdfs_output_dir }}/enrichment/indexed" }
+
+
+- include: source_config.yml
+  run_once: true
+
+- include: threat_intel.yml
+  run_once: true
+  when: threat_intel_bulk_load == True
+
+- include: metron_topology.yml
+
